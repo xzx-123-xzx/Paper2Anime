@@ -1,0 +1,123 @@
+version: '3.8'
+
+services:
+  # ========== 前端 ==========
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    ports:
+      - "5173:5173"
+    environment:
+      - VITE_API_BASE_URL=http://localhost:8000/api/v1
+    depends_on:
+      - nginx
+    networks:
+      - paper2anime
+
+  nginx:
+    image: nginx:alpine
+    ports:
+      - "80:80"
+    volumes:
+      - ./docker/nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+    depends_on:
+      - frontend
+      - backend
+    networks:
+      - paper2anime
+
+  # ========== 后端 ==========
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    ports:
+      - "8000:8000"
+    environment:
+      - APP_ENV=production
+    env_file:
+      - .env
+    volumes:
+      - ./storage:/app/storage
+      - ./logs:/app/logs
+    depends_on:
+      - mysql
+      - redis
+      - minio
+    networks:
+      - paper2anime
+    deploy:
+      replicas: 2
+
+  # ========== Celery Workers ==========
+  celery-worker:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    command: celery -app app.tasks.celery_app worker --loglevel=info --concurrency=4
+    environment:
+      - APP_ENV=production
+    env_file:
+      - .env
+    volumes:
+      - ./storage:/app/storage
+      - ./logs:/app/logs
+    depends_on:
+      - redis
+      - mysql
+      - minio
+    networks:
+      - paper2anime
+    deploy:
+      replicas: 3
+
+  # ========== 数据库 ==========
+  mysql:
+    image: mysql:8.0
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-rootpassword}
+      MYSQL_DATABASE: paper2anime
+      MYSQL_USER: ${MYSQL_USER:-paper2anime}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:-paper2anime123}
+    volumes:
+      - mysql_data:/var/lib/mysql
+    ports:
+      - "3306:3306"
+    networks:
+      - paper2anime
+
+  # ========== Redis ==========
+  redis:
+    image: redis:7-alpine
+    command: redis-server --appendonly yes --requirepass ${REDIS_PASSWORD:-redis123}
+    volumes:
+      - redis_data:/data
+    ports:
+      - "6379:6379"
+    networks:
+      - paper2anime
+
+  # ========== MinIO (对象存储) ==========
+  minio:
+    image: minio/minio:latest
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-minioadmin123}
+    volumes:
+      - minio_data:/data
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    networks:
+      - paper2anime
+
+networks:
+  paper2anime:
+    driver: bridge
+
+volumes:
+  mysql_data:
+  redis_data:
+  minio_data:
